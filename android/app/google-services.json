@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "168241402323",
+    "project_id": "my-clima-talk",
+    "storage_bucket": "my-clima-talk.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:168241402323:android:e4334081dcce41e5c1df26",
+        "android_client_info": {
+          "package_name": "com.example.clima_talk"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBnk_h9ssy65QW1rUYGCvdBBTthx1T8Rw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
