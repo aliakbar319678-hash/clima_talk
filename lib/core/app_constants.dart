@@ -13,11 +13,17 @@ class AppConstants {
       'https://api.openweathermap.org/data/2.5';
 
   // ─── AI Service Configuration ───────────────────────────────────────────────
-  // Google Gemini API settings for the smart weather companion chat feature.
-  static const String aiApiKey = 'AIzaSyBJ54hsocuI0mDGDJM8VA4jNDGmGdbiGdw';
-  static const String aiBaseUrl =
-      'https://generativelanguage.googleapis.com/v1';
-  static const String aiModel = 'gemini-2.0-flash';
+  // Google Gemini — powerful AI model.
+  // IMPORTANT: Replace this with your valid Google AI API key.
+  static const String geminiApiKey = 'REPLACE_WITH_YOUR_GEMINI_API_KEY';
+  static const String geminiModel = 'gemini-1.5-flash';
+
+  // AI Error Messages
+  static const String errorNoApiKey = 'Missing Gemini API Key. Please configure it in AppConstants.';
+  static const String errorTimeout = 'The AI is taking too long to respond. Please try again.';
+  static const String errorQuotaExceeded = 'Gemini API quota exceeded. Please try again later.';
+  static const String errorNoInternet = 'No internet connection. Please check your network.';
+  static const String errorGeneric = 'Something went wrong with the AI service. Please try again.';
 
   // ─── Performance & Cache Settings ──────────────────────────────────────────
   // Parameters for controlling memory usage and data freshness.
@@ -25,6 +31,7 @@ class AppConstants {
   static const int cacheExpiryMinutes = 10;
   static const int maxChatHistory = 50;
   static const int apiTimeoutSeconds = 30;
-
+  static const int maxRetries = 3;
+  static const int retryDelaySeconds = 2;
 }
 

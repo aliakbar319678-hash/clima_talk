@@ -1,142 +1,143 @@
-// ChatProvider manages the AI chatbot conversation state.
-// Corresponds to the AIChatbot class from SRS Section 3.4.3.
-
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../models/chat_message_model.dart';
 import '../models/weather_model.dart';
 import '../services/ai_service.dart';
-import '../services/session_cache_service.dart';
 import '../core/app_constants.dart';
+import 'dart:developer' as dev;
 
-/// Holds the list of chat messages and loading state.
+/// ChatState holds the current conversation and UI-specific flags.
 class ChatState {
   final List<ChatMessageModel> messages;
-  final bool isLoading;
-  final String? errorMessage;
+  final bool isTyping;
+  final String? error;
 
   const ChatState({
     this.messages = const [],
-    this.isLoading = false,
-    this.errorMessage,
+    this.isTyping = false,
+    this.error,
   });
-
-  bool get hasError => errorMessage != null;
 
   ChatState copyWith({
     List<ChatMessageModel>? messages,
-    bool? isLoading,
-    String? errorMessage,
+    bool? isTyping,
+    String? error,
+    bool clearError = false,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
-      isLoading: isLoading ?? this.isLoading,
-      errorMessage: errorMessage,
+      isTyping: isTyping ?? this.isTyping,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
 
-/// Notifier for AI chatbot conversation management.
-class ChatNotifier extends Notifier<ChatState> {
+/// Notifier for managing AI Chat using AsyncNotifier for robust state handling.
+class ChatNotifier extends AsyncNotifier<ChatState> {
   late final AIService _aiService;
-  late final SessionCacheService _cache;
 
   @override
-  ChatState build() {
+  FutureOr<ChatState> build() async {
     _aiService = AIService();
-    _cache = SessionCacheService();
-
-    // Add a welcome message when the chat screen first loads
+    
+    // Initial state with welcome message
     return ChatState(
       messages: [
         ChatMessageModel.assistant(
-          content:
-              'Hi! I\'m your ClimaTalk AI weather assistant. '
-              'Ask me anything about weather — "Will it rain today?", '
-              '"What should I wear?", or "Is it safe to travel?" 🌤️',
+          content: 'Hi! I\'m your ClimaTalk AI companion. How can I help you today? 🌤️',
         ),
       ],
     );
   }
 
-  /// Sends a user message and requests an AI response.
-  Future<void> sendMessage(
-    String userText, {
-    WeatherModel? currentWeather,
-  }) async {
-    if (userText.trim().isEmpty) return;
+  /// Sends a message and updates state. Handles retries and error recovery.
+  Future<void> sendMessage(String text, {WeatherModel? currentWeather}) async {
+    if (text.trim().isEmpty) return;
 
-    // Add user's message to the conversation
-    final userMessage = ChatMessageModel.user(content: userText.trim());
-    final loadingMessage = ChatMessageModel.loading();
+    final userMsg = ChatMessageModel.user(content: text.trim());
+    
+    // Update local state immediately with user message and typing indicator
+    final previousState = state.value ?? const ChatState();
+    state = AsyncData(previousState.copyWith(
+      messages: [...previousState.messages, userMsg],
+      isTyping: true,
+      clearError: true,
+    ));
 
-    state = state.copyWith(
-      messages: [...state.messages, userMessage, loadingMessage],
-      isLoading: true,
-      errorMessage: null,
-    );
+    await _fetchAIResponse(text, currentWeather);
+  }
 
+  /// Internal method to fetch AI response with retry logic
+  Future<void> _fetchAIResponse(String text, WeatherModel? weather, {int retryCount = 0}) async {
     try {
-      // Check session cache for repeated queries (performance optimization)
-      final cacheKey = SessionCacheService.aiKey(userText);
-      String? cachedResponse = _cache.retrieve<String>(cacheKey);
-
-      final aiResponse =
-          cachedResponse ??
-          await _aiService.getWeatherGuidance(
-            userQuery: userText.trim(),
-            currentWeather: currentWeather,
-          );
-
-      // Cache the AI response for repeated similar queries
-      if (cachedResponse == null) {
-        _cache.store(cacheKey, aiResponse);
-      }
-
-      // Replace loading message with actual AI response
-      final updatedMessages = List<ChatMessageModel>.from(
-        state.messages.where((m) => !m.isLoading),
-      )..add(ChatMessageModel.assistant(content: aiResponse));
-
-      // Enforce max chat history limit from SRS
-      final trimmed = updatedMessages.length > AppConstants.maxChatHistory
-          ? updatedMessages.sublist(
-              updatedMessages.length - AppConstants.maxChatHistory,
-            )
-          : updatedMessages;
-
-      state = state.copyWith(messages: trimmed, isLoading: false);
-    } catch (e) {
-      // Remove the loading indicator and show error in the chat
-      final messagesWithoutLoading = state.messages
-          .where((m) => !m.isLoading)
+      final history = state.value!.messages
+          .where((m) => !m.isLoading && m.role != MessageRole.user || m.content != text)
+          .map((m) => {
+                'role': m.isUser ? 'user' : 'assistant',
+                'content': m.content,
+              })
           .toList();
 
-      final errorMessage = e.toString().replaceAll('Exception: ', '');
-      
-      state = state.copyWith(
-        messages: [
-          ...messagesWithoutLoading,
-          ChatMessageModel.assistant(
-            content: 'Error: $errorMessage ⚠️',
-          ),
-        ],
-        isLoading: false,
-        errorMessage: errorMessage,
+      // Drop the very last user message from history as it's the current query
+      if (history.isNotEmpty && history.last['role'] == 'user' && history.last['content'] == text) {
+        history.removeLast();
+      }
+
+      final aiResponse = await _aiService.getWeatherGuidance(
+        userQuery: text,
+        history: history,
+        currentWeather: weather,
       );
+
+      final currentState = state.value!;
+      final newAssistantMsg = ChatMessageModel.assistant(content: aiResponse);
+      
+      var updatedMessages = [...currentState.messages, newAssistantMsg];
+
+      // Enforce history limit
+      if (updatedMessages.length > AppConstants.maxChatHistory) {
+        updatedMessages = updatedMessages.sublist(updatedMessages.length - AppConstants.maxChatHistory);
+      }
+
+      state = AsyncData(currentState.copyWith(
+        messages: updatedMessages,
+        isTyping: false,
+      ));
+    } catch (e, stack) {
+      if (retryCount < AppConstants.maxRetries) {
+        dev.log('Retrying AI request (${retryCount + 1}/${AppConstants.maxRetries}) due to: $e');
+        await Future.delayed(const Duration(seconds: AppConstants.retryDelaySeconds));
+        return _fetchAIResponse(text, weather, retryCount: retryCount + 1);
+      }
+
+      dev.log('AI Request failed after retries', error: e, stackTrace: stack);
+      
+      final currentState = state.value!;
+      final errorMsg = e.toString().replaceFirst('Exception: ', '');
+      
+      state = AsyncData(currentState.copyWith(
+        isTyping: false,
+        error: errorMsg,
+        messages: [
+          ...currentState.messages,
+          ChatMessageModel.assistant(content: '⚠️ $errorMsg'),
+        ],
+      ));
     }
   }
 
-  /// Clears the conversation history and resets to welcome message.
+  /// Clears the chat history
   void clearChat() {
-    state = ChatState(
+    state = AsyncData(ChatState(
       messages: [
         ChatMessageModel.assistant(
           content: 'Chat cleared! Ask me anything about weather. 🌤️',
         ),
       ],
-    );
+    ));
   }
 }
 
-final chatProvider = NotifierProvider<ChatNotifier, ChatState>(ChatNotifier.new);
+final chatProvider = AsyncNotifierProvider<ChatNotifier, ChatState>(ChatNotifier.new);
+
+

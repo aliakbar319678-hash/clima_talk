@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/app_theme.dart';
+import '../models/chat_message_model.dart';
 import '../providers/chat_provider.dart';
 import '../providers/weather_provider.dart';
 import '../widgets/chat_bubble.dart';
@@ -40,8 +41,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _focusNode.unfocus();
     final weather = ref.read(weatherProvider).weather;
     ref.read(chatProvider.notifier).sendMessage(text, currentWeather: weather);
-    // Scroll after the new message is rendered — addPostFrameCallback is more
-    // reliable than a fixed delay because it fires exactly after the frame builds.
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
@@ -57,7 +56,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final chatState = ref.watch(chatProvider);
+    final chatAsync = ref.watch(chatProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final titleColor = isDark ? Colors.white : AppTheme.textPrimaryDark;
     final subColor = isDark ? AppTheme.textSecondaryLight : AppTheme.textSecondaryDark;
@@ -108,156 +107,187 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // Messages
-          Expanded(
-            child: chatState.messages.isEmpty
-                ? _buildEmptyState(isDark, activeColor)
-                : ListView.builder(
-                    controller: _scrollCtrl,
-                    physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    itemCount: chatState.messages.length,
-                    itemBuilder: (_, i) =>
-                        ChatBubble(message: chatState.messages[i]),
-                  ),
+      body: chatAsync.when(
+        data: (state) => _buildChatContent(state, isDark, activeColor, inputBg, barBg),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, stack) => Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
+              const SizedBox(height: 16),
+              Text('Failed to load chat: $err'),
+              ElevatedButton(
+                onPressed: () => ref.invalidate(chatProvider),
+                child: const Text('Retry'),
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
 
-          if (!chatState.isLoading)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                children: _kSuggestions
-                    .map(
-                      (s) => Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ActionChip(
-                          label: Text(s, style: const TextStyle(fontSize: 12)),
-                          onPressed: () {
-                            _inputCtrl.text = s;
-                            _sendMessage();
-                          },
-                          backgroundColor: activeColor.withValues(alpha: 0.1),
-                          side: BorderSide(
-                            color: activeColor.withValues(alpha: 0.3),
-                            width: 0.8,
-                          ),
-                          labelStyle: TextStyle(
-                            color: activeColor,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-            decoration: BoxDecoration(
-              color: barBg,
-              border: Border(
-                top: BorderSide(
-                  color: isDark
-                      ? AppTheme.nightBorder.withValues(alpha: 0.4)
-                      : const Color(0xFFE0E8F5),
-                  width: 0.8,
+  Widget _buildChatContent(
+    ChatState state,
+    bool isDark,
+    Color activeColor,
+    Color inputBg,
+    Color barBg,
+  ) {
+    return Column(
+      children: [
+        // Messages
+        Expanded(
+          child: state.messages.isEmpty
+              ? _buildEmptyState(isDark, activeColor)
+              : ListView.builder(
+                  controller: _scrollCtrl,
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  itemCount: state.messages.length + (state.isTyping ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (i == state.messages.length) {
+                      return ChatBubble(message: ChatMessageModel.assistant(
+                        content: '...',
+                        isLoading: true,
+                      ));
+                    }
+                    return ChatBubble(message: state.messages[i]);
+                  },
                 ),
-              ),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: inputBg,
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: isDark
-                              ? AppTheme.nightBorder.withValues(alpha: 0.4)
-                              : const Color(0xFFCDD5E8),
+        ),
+
+        // Suggestions
+        if (!state.isTyping)
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Row(
+              children: _kSuggestions
+                  .map(
+                    (s) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ActionChip(
+                        label: Text(s, style: const TextStyle(fontSize: 12)),
+                        onPressed: () {
+                          _inputCtrl.text = s;
+                          _sendMessage();
+                        },
+                        backgroundColor: activeColor.withValues(alpha: 0.1),
+                        side: BorderSide(
+                          color: activeColor.withValues(alpha: 0.3),
                           width: 0.8,
                         ),
-                      ),
-                      child: TextField(
-                        controller: _inputCtrl,
-                        focusNode: _focusNode,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: TextStyle(
-                          color: isDark
-                              ? Colors.white
-                              : AppTheme.textPrimaryLight,
-                          fontSize: 14,
+                        labelStyle: TextStyle(
+                          color: activeColor,
+                          fontWeight: FontWeight.w500,
                         ),
-                        decoration: InputDecoration(
-                          hintText: 'Ask about the weather...',
-                          hintStyle: TextStyle(
-                            color: AppTheme.textHint,
-                            fontSize: 14,
-                          ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 12,
-                          ),
-                          filled: false,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                        onSubmitted: (_) => _sendMessage(),
-                        enabled: !chatState.isLoading,
-                        maxLines: 3,
-                        minLines: 1,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    onTap: chatState.isLoading ? null : _sendMessage,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 46,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        gradient: chatState.isLoading
-                            ? null
-                            : const LinearGradient(
-                                colors: [Color(0xFF1A6EEB), Color(0xFF5B4DFF)],
-                              ),
-                        color: chatState.isLoading ? Colors.grey : null,
-                        shape: BoxShape.circle,
-                      ),
-                      child: chatState.isLoading
-                          ? const Center(
-                              child: SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            )
-                          : const Icon(
-                              Icons.send_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                    ),
-                  ),
-                ],
+                  )
+                  .toList(),
+            ),
+          ),
+
+        // Input
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          decoration: BoxDecoration(
+            color: barBg,
+            border: Border(
+              top: BorderSide(
+                color: isDark
+                    ? AppTheme.nightBorder.withValues(alpha: 0.4)
+                    : const Color(0xFFE0E8F5),
+                width: 0.8,
               ),
             ),
           ),
-        ],
-      ),
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: inputBg,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: isDark
+                            ? AppTheme.nightBorder.withValues(alpha: 0.4)
+                            : const Color(0xFFCDD5E8),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: TextField(
+                      controller: _inputCtrl,
+                      focusNode: _focusNode,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : AppTheme.textPrimaryLight,
+                        fontSize: 14,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Ask about the weather...',
+                        hintStyle: TextStyle(
+                          color: AppTheme.textHint,
+                          fontSize: 14,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 12,
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
+                      enabled: !state.isTyping,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: state.isTyping ? null : _sendMessage,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      gradient: state.isTyping
+                          ? null
+                          : const LinearGradient(
+                              colors: [Color(0xFF1A6EEB), Color(0xFF5B4DFF)],
+                            ),
+                      color: state.isTyping ? Colors.grey : null,
+                      shape: BoxShape.circle,
+                    ),
+                    child: state.isTyping
+                        ? const Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(
+                            Icons.send_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

@@ -4,14 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/app_theme.dart';
 import '../providers/weather_provider.dart';
 import '../providers/forecast_provider.dart';
-import '../providers/notification_provider.dart';
+
 import '../widgets/weather_card.dart';
 import '../widgets/loading_widget.dart';
 import '../widgets/app_error_widget.dart';
 import 'forecast_screen.dart';
 import 'chat_screen.dart';
 import 'saved_cities_screen.dart';
-import 'alerts_screen.dart';
+
 import 'settings_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -45,7 +45,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       const ForecastScreen(),
       const ChatScreen(),
       const SavedCitiesScreen(),
-      const AlertsScreen(),
     ];
 
     Future.microtask(
@@ -130,14 +129,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 selectedIndex: _selectedIndex,
                 onTap: _onTabTapped,
               ),
-              _NavItem(
-                icon: Icons.warning_amber_outlined,
-                activeIcon: Icons.warning_amber_rounded,
-                label: 'Alerts',
-                index: 4,
-                selectedIndex: _selectedIndex,
-                onTap: _onTabTapped,
-              ),
+
             ],
           ),
         ),
@@ -300,12 +292,6 @@ class _HomeTabState extends ConsumerState<_HomeTab>
         final newCity = current.weather!.cityName;
         if (prevCity == newCity) return;
 
-        ref
-            .read(alertProvider.notifier)
-            .checkAlertsForLocation(
-              current.weather!.latitude,
-              current.weather!.longitude,
-            );
         ref
             .read(forecastProvider.notifier)
             .fetchForecastByCoords(

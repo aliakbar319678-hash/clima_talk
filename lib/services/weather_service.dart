@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 import '../core/app_constants.dart';
 import '../models/weather_model.dart';
 import '../models/forecast_model.dart';
-import '../models/weather_alert_model.dart';
+
 
 class WeatherService {
   // HTTP client reused across requests for connection pooling efficiency
@@ -71,73 +71,6 @@ class WeatherService {
 
     final response = await _makeRequest(uri);
     return ForecastResponse.fromJson(response);
-  }
-
-  // ─── Weather Alerts ───────────────────────────────────────────────────────
-
-  Future<List<WeatherAlertModel>> getWeatherAlerts(
-    double lat,
-    double lon,
-  ) async {
-    try {
-      final weather = await getCurrentWeatherByCoords(lat, lon);
-      List<WeatherAlertModel> alerts = [];
-      
-      final conditionLower = weather.condition.toLowerCase();
-      if (conditionLower.contains('thunderstorm')) {
-        alerts.add(WeatherAlertModel(
-          event: 'Severe Thunderstorm',
-          senderName: 'ClimaTalk Alert System',
-          start: DateTime.now(),
-          end: DateTime.now().add(const Duration(hours: 3)),
-          description: 'Severe thunderstorms detected in your area. Expect heavy rain and strong winds. Please stay indoors.',
-          tags: ['Thunderstorm', 'Severe'],
-        ));
-      } else if (conditionLower.contains('rain') && weather.windSpeed > 10) {
-        alerts.add(WeatherAlertModel(
-          event: 'Storm Warning',
-          senderName: 'ClimaTalk Alert System',
-          start: DateTime.now(),
-          end: DateTime.now().add(const Duration(hours: 4)),
-          description: 'Strong winds and rain detected. Secure loose objects and avoid unnecessary travel.',
-          tags: ['Rain', 'Wind'],
-        ));
-      } else if (weather.temperature >= 35) {
-        alerts.add(WeatherAlertModel(
-          event: 'Heat Advisory',
-          senderName: 'ClimaTalk Alert System',
-          start: DateTime.now(),
-          end: DateTime.now().add(const Duration(hours: 6)),
-          description: 'Temperatures are very high. Stay hydrated and avoid prolonged exposure to the sun.',
-          tags: ['Heat', 'Advisory'],
-        ));
-      } else if (weather.temperature <= 0) {
-        alerts.add(WeatherAlertModel(
-          event: 'Freezing Temperature Warning',
-          senderName: 'ClimaTalk Alert System',
-          start: DateTime.now(),
-          end: DateTime.now().add(const Duration(hours: 6)),
-          description: 'Temperatures are at or below freezing. Risk of ice and frost. Keep warm.',
-          tags: ['Cold', 'Freezing'],
-        ));
-      }
-
-      // If no extreme conditions, provide a general advisory so the screen works
-      if (alerts.isEmpty) {
-        alerts.add(WeatherAlertModel(
-          event: 'General Weather Advisory',
-          senderName: 'ClimaTalk Service',
-          start: DateTime.now(),
-          end: DateTime.now().add(const Duration(hours: 12)),
-          description: 'Current weather condition is ${weather.condition} with ${weather.temperature.round()}°C. Please remain aware of your surroundings as conditions can change.',
-          tags: ['General', 'Advisory'],
-        ));
-      }
-
-      return alerts;
-    } catch (_) {
-      return [];
-    }
   }
 
   // ─── Private Helpers ──────────────────────────────────────────────────────

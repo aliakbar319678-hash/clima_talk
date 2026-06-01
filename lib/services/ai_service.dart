@@ -1,81 +1,102 @@
+import 'dart:io';
+import 'dart:async';
 import 'package:google_generative_ai/google_generative_ai.dart';
-
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../core/app_constants.dart';
 import '../models/weather_model.dart';
+import 'dart:developer' as dev;
 
+/// AIService uses Google Gemini API for intelligent weather guidance.
+/// Implements robust error handling and context-aware system prompts.
 class AIService {
-  // Lazy singletons — created once per AIService instance and reused across calls.
-  late final GenerativeModel _model = GenerativeModel(
-    model: AppConstants.aiModel,
-    apiKey: AppConstants.aiApiKey,
-  );
+  AIService();
 
+  /// Sends the full conversation history to Gemini and returns the reply.
+  /// Handles timeouts, connectivity check, and specific error codes.
   Future<String> getWeatherGuidance({
     required String userQuery,
+    required List<Map<String, String>> history,
     WeatherModel? currentWeather,
   }) async {
-    final systemPrompt = _buildSystemPrompt(currentWeather);
-    return _callGemini(systemPrompt, userQuery);
-  }
+    // 1. Check Internet Connectivity
+    final connectivityResult = await Connectivity().checkConnectivity();
+    if (connectivityResult.contains(ConnectivityResult.none)) {
+      throw const SocketException(AppConstants.errorNoInternet);
+    }
 
-  Future<String> _callGemini(String systemPrompt, String userQuery) async {
+    // 2. Validate API Key
+    if (AppConstants.geminiApiKey == 'REPLACE_WITH_YOUR_GEMINI_API_KEY' ||
+        AppConstants.geminiApiKey.isEmpty) {
+      throw Exception(AppConstants.errorNoApiKey);
+    }
+
+    final systemPrompt = _buildSystemPrompt(currentWeather);
+
+    // 3. Convert history to Gemini Content format
+    final chatHistory = history.map((msg) {
+      final role = msg['role'] == 'user' ? 'user' : 'model';
+      return Content(role, [TextPart(msg['content'] ?? '')]);
+    }).toList();
+
+    // 4. Initialize Model
+    final model = GenerativeModel(
+      model: AppConstants.geminiModel,
+      apiKey: AppConstants.geminiApiKey,
+      systemInstruction: Content.system(systemPrompt),
+    );
+
+    final chat = model.startChat(history: chatHistory);
+
     try {
-      final response = await _model
-          .generateContent(
-            [Content.text(userQuery)],
-            generationConfig: GenerationConfig(
-              maxOutputTokens: 300,
-              temperature: 0.7,
-            ),
-            // Pass system instruction per-request so it reflects current weather context.
-            safetySettings: [],
-          )
-          .timeout(
-            Duration(seconds: AppConstants.apiTimeoutSeconds),
-            onTimeout: () =>
-                throw Exception('AI service timed out. Please try again.'),
+      dev.log('Sending message to Gemini: $userQuery', name: 'AIService');
+      
+      final response = await chat.sendMessage(Content.text(userQuery)).timeout(
+            const Duration(seconds: AppConstants.apiTimeoutSeconds),
           );
 
       final text = response.text;
-      if (text != null && text.isNotEmpty) return text.trim();
-      return 'No response received from AI.';
+      if (text != null && text.trim().isNotEmpty) {
+        dev.log('Received response from Gemini', name: 'AIService');
+        return text.trim();
+      }
+      
+      throw Exception('Empty response from AI.');
+    } on SocketException {
+      throw Exception(AppConstants.errorNoInternet);
+    } on TimeoutException {
+      throw Exception(AppConstants.errorTimeout);
+    } on GenerativeAIException catch (e) {
+      dev.log('Gemini AI Exception: $e', name: 'AIService', error: e);
+      if (e.message.contains('429') || e.message.contains('quota')) {
+        throw Exception(AppConstants.errorQuotaExceeded);
+      } else if (e.message.contains('401') || e.message.contains('API_KEY_INVALID')) {
+        throw Exception(AppConstants.errorNoApiKey);
+      }
+      throw Exception('${AppConstants.errorGeneric} (${e.message})');
     } catch (e) {
-      final err = e.toString().toLowerCase();
-
-      if (err.contains('quota') || err.contains('rate limit') || err.contains('429')) {
-        return 'ClimaTalk is a bit busy right now (Quota Reached). Please wait a minute and try again! 😊';
-      }
-      // Fallback: prepend system context inline for models that reject system instructions.
-      if (err.contains('systeminstruction') || err.contains('400')) {
-        return _callGeminiFallback(systemPrompt, userQuery);
-      }
-      throw Exception('AI connection error: ${e.toString()}');
+      dev.log('Unexpected AI Service Error: $e', name: 'AIService', error: e);
+      throw Exception(AppConstants.errorGeneric);
     }
   }
 
-  Future<String> _callGeminiFallback(String systemPrompt, String userQuery) async {
-    final response = await _model.generateContent(
-      [Content.text('$systemPrompt\n\nUser question: $userQuery')],
-      generationConfig: GenerationConfig(maxOutputTokens: 300, temperature: 0.7),
-    );
-    return response.text?.trim() ?? 'No response received.';
-  }
-
   String _buildSystemPrompt(WeatherModel? weather) {
-    const base =
-        'You are ClimaTalk, a helpful AI weather companion. '
-        'You provide friendly, practical weather advice and can answer weather-related questions about any city worldwide. '
-        'Keep responses concise (2-4 sentences), friendly, and actionable.';
+    const base = 'You are ClimaTalk, a professional and friendly AI weather companion. '
+        'Your goal is to provide insightful, accurate, and practical weather advice. '
+        'Always response with complete sentences. Be concise but helpful. '
+        'If the user asks something unrelated to weather, politely pivot back to weather '
+        'or offer general assistance while maintaining your persona.';
 
     if (weather == null) return base;
 
     return '$base\n\n'
-        'The user\'s currently selected location:\n'
-        '- Location: ${weather.cityName}, ${weather.countryCode}\n'
-        '- Temperature: ${weather.temperature.round()}°C (feels like ${weather.feelsLike.round()}°C)\n'
-        '- Condition: ${weather.condition} — ${weather.description}\n'
+        "CONTEXT: Current location weather:\n"
+        '- City: ${weather.cityName}\n'
+        '- Temp: ${weather.temperature.round()}°C (Feels like: ${weather.feelsLike.round()}°C)\n'
+        '- Conditions: ${weather.condition} (${weather.description})\n'
         '- Humidity: ${weather.humidity}%\n'
         '- Wind: ${weather.windSpeed} m/s\n\n'
-        'Use this data for location-specific advice. For other locations, use your general knowledge.';
+        'Use this data to personalize your advice. If the user asks about multiple locations, '
+        'prioritize the current one unless they specify otherwise.';
   }
 }
+
