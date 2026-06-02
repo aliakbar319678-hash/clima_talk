@@ -1,17 +1,18 @@
 import 'dart:io';
 import 'dart:async';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../core/app_constants.dart';
 import '../models/weather_model.dart';
 import 'dart:developer' as dev;
 
-/// AIService uses Google Gemini API for intelligent weather guidance.
+/// AIService uses Pollinations Text API for intelligent weather guidance.
 /// Implements robust error handling and context-aware system prompts.
 class AIService {
   AIService();
 
-  /// Sends the full conversation history to Gemini and returns the reply.
+  /// Sends the full conversation history to Pollinations AI and returns the reply.
   /// Handles timeouts, connectivity check, and specific error codes.
   Future<String> getWeatherGuidance({
     required String userQuery,
@@ -24,55 +25,46 @@ class AIService {
       throw const SocketException(AppConstants.errorNoInternet);
     }
 
-    // 2. Validate API Key
-    if (AppConstants.geminiApiKey == 'REPLACE_WITH_YOUR_GEMINI_API_KEY' ||
-        AppConstants.geminiApiKey.isEmpty) {
-      throw Exception(AppConstants.errorNoApiKey);
-    }
-
     final systemPrompt = _buildSystemPrompt(currentWeather);
 
-    // 3. Convert history to Gemini Content format
-    final chatHistory = history.map((msg) {
-      final role = msg['role'] == 'user' ? 'user' : 'model';
-      return Content(role, [TextPart(msg['content'] ?? '')]);
-    }).toList();
+    // 2. Prepare the messages array for the API
+    final List<Map<String, String>> messages = [
+      {'role': 'system', 'content': systemPrompt},
+    ];
 
-    // 4. Initialize Model
-    final model = GenerativeModel(
-      model: AppConstants.geminiModel,
-      apiKey: AppConstants.geminiApiKey,
-      systemInstruction: Content.system(systemPrompt),
-    );
+    for (var msg in history) {
+      messages.add({
+        'role': msg['role'] == 'user' ? 'user' : 'assistant',
+        'content': msg['content'] ?? '',
+      });
+    }
 
-    final chat = model.startChat(history: chatHistory);
+    messages.add({'role': 'user', 'content': userQuery});
 
     try {
-      dev.log('Sending message to Gemini: $userQuery', name: 'AIService');
+      dev.log('Sending message to AI: $userQuery', name: 'AIService');
       
-      final response = await chat.sendMessage(Content.text(userQuery)).timeout(
-            const Duration(seconds: AppConstants.apiTimeoutSeconds),
-          );
+      final response = await http.post(
+        Uri.parse('https://text.pollinations.ai/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'messages': messages}),
+      ).timeout(
+        const Duration(seconds: AppConstants.apiTimeoutSeconds),
+      );
 
-      final text = response.text;
-      if (text != null && text.trim().isNotEmpty) {
-        dev.log('Received response from Gemini', name: 'AIService');
-        return text.trim();
+      if (response.statusCode == 200) {
+        final text = response.body;
+        if (text.trim().isNotEmpty) {
+          dev.log('Received response from AI', name: 'AIService');
+          return text.trim();
+        }
       }
       
-      throw Exception('Empty response from AI.');
+      throw Exception('Empty or invalid response from AI.');
     } on SocketException {
       throw Exception(AppConstants.errorNoInternet);
     } on TimeoutException {
       throw Exception(AppConstants.errorTimeout);
-    } on GenerativeAIException catch (e) {
-      dev.log('Gemini AI Exception: $e', name: 'AIService', error: e);
-      if (e.message.contains('429') || e.message.contains('quota')) {
-        throw Exception(AppConstants.errorQuotaExceeded);
-      } else if (e.message.contains('401') || e.message.contains('API_KEY_INVALID')) {
-        throw Exception(AppConstants.errorNoApiKey);
-      }
-      throw Exception('${AppConstants.errorGeneric} (${e.message})');
     } catch (e) {
       dev.log('Unexpected AI Service Error: $e', name: 'AIService', error: e);
       throw Exception(AppConstants.errorGeneric);
